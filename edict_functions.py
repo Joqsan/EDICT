@@ -114,10 +114,10 @@ def EDICT_editing(
     # run_baseline defaults to false ==> default to DDIM, true ==> EDICT
     """
     (reverse, run_baseline)
-    (False, False) -->  No noising step, DDIM.
-    (False, True)  -->  No noising step, EDICT. 
-    (True, False)  -->  Noising step, DDIM. 
-    (True, True)   -->  Noising step, EDICT. 
+    (False, False) -->  No noising step, return original and edited image.
+    (False, True)  -->  No noising step, return both edited images. 
+    (True, False)  -->  Noising step, return original and edited image. 
+    (True, True)   -->  Noising step, return both edited images. 
     """
     latents = coupled_stablediffusion(
         prompt=base_prompt,
@@ -132,8 +132,8 @@ def EDICT_editing(
     # Denoise intermediate state with new conditioning
     # reverse=false (the default) ==> do denoising step
     gen = coupled_stablediffusion(
-        edit_prompt if (not use_p2p) else base_prompt,
-        None if (not use_p2p) else edit_prompt,
+        prompt=edit_prompt if (not use_p2p) else base_prompt,
+        prompt_edit=None if (not use_p2p) else edit_prompt,
         fixed_starting_latent=latents,
         init_image_strength=init_image_strength,
         steps=steps,
@@ -239,7 +239,7 @@ def init_attention_func():
             end_idx = (i + 1) * slice_size
             attn_slice = (
                 torch.einsum(
-                    "b i d, b j d -> b i j",
+                    "bid, bjd -> bij",
                     query[start_idx:end_idx],
                     key[start_idx:end_idx],
                 )
@@ -270,7 +270,7 @@ def init_attention_func():
                 self.use_last_attn_weights = False
 
             attn_slice = torch.einsum(
-                "b i j, b j d -> b i d", attn_slice, value[start_idx:end_idx]
+                "bij, bjd -> bid", attn_slice, value[start_idx:end_idx]
             )
 
             hidden_states[start_idx:end_idx] = attn_slice
@@ -874,10 +874,9 @@ def coupled_stablediffusion(
     height = height - height % 64
 
     # Preprocess image if it exists (img2img)
-    ## There is init_image when noising the image
+    ##TODO: There is init_image when noising the image
     if init_image is not None:
-        ## assert that we want to the noising step
-
+        ##TODO: assert that we want to the noising step
         assert reverse  # want to be performing deterministic noising
         # can take either pair (output of generative process) or single image
         if isinstance(init_image, list):
@@ -896,6 +895,7 @@ def coupled_stablediffusion(
         )
         t_limit = 0
 
+    ## TODO: when noising
     if reverse:
         latent = init_latent
     else:
