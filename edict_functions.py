@@ -9,10 +9,14 @@ from tqdm.auto import tqdm
 from transformers import CLIPModel, CLIPTokenizer
 
 # Have diffusers with hardcoded double-casting instead of float
-from my_diffusers import (AutoencoderKL, DDIMScheduler, DDPMScheduler,
+# from my_diffusers import (AutoencoderKL, DDIMScheduler, DDPMScheduler,
+#                           LMSDiscreteScheduler, PNDMScheduler,
+#                           UNet2DConditionModel)
+# from my_diffusers.schedulers.scheduling_utils import SchedulerOutput
+from diffusers import (AutoencoderKL, DDIMScheduler, DDPMScheduler,
                           LMSDiscreteScheduler, PNDMScheduler,
                           UNet2DConditionModel)
-from my_diffusers.schedulers.scheduling_utils import SchedulerOutput
+from diffusers.schedulers.scheduling_utils import SchedulerOutput
 
 # StableDiffusion P2P implementation originally from https://github.com/bloc97/CrossAttentionControl
 
