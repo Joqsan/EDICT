@@ -5,4 +5,5 @@ base_prompt = "A cupcake"
 target_prompt = "An Easter cupcake"
 
 
-EDICT_editing(im_path, base_prompt, target_prompt)
+if __name__ == "__main__":
+    EDICT_editing(im_path, base_prompt, target_prompt)
