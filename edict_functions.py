@@ -1,24 +1,14 @@
-import datetime
-import math
-import os
-import pickle
+
 import random
-import sys
-import time
 from difflib import SequenceMatcher
 
-import imageio
-import matplotlib.pyplot as plt
+
 import numpy as np
 import torch
-import torch.nn.functional as F
-import torchvision
-from omegaconf import OmegaConf
 from PIL import Image
 from torch import autocast
-from torchvision import datasets
 from tqdm.auto import tqdm
-from transformers import CLIPModel, CLIPTextModel, CLIPTokenizer
+from transformers import CLIPModel, CLIPTokenizer
 
 # Have diffusers with hardcoded double-casting instead of float
 from my_diffusers import (AutoencoderKL, DDIMScheduler, DDPMScheduler,
