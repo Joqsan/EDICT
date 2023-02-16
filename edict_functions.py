@@ -1,7 +1,5 @@
-
 import random
 from difflib import SequenceMatcher
-
 
 import numpy as np
 import torch
@@ -17,8 +15,6 @@ from my_diffusers import (AutoencoderKL, DDIMScheduler, DDPMScheduler,
 from my_diffusers.schedulers.scheduling_utils import SchedulerOutput
 
 # StableDiffusion P2P implementation originally from https://github.com/bloc97/CrossAttentionControl
-
-
 
 
 # Build our CLIP model
@@ -426,7 +422,7 @@ def baseline_stablediffusion(
         )
         if scheduler_str == "ddim":
             if init_image is not None:
-                raise notImplementedError
+                raise NotImplementedError
                 latent = scheduler.add_noise(
                     init_latent, noise, 1000 - int(1000 * init_image_strength)
                 ).to(device)
