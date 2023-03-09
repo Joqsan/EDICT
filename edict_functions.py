@@ -98,7 +98,8 @@ def EDICT_editing(
 
     # compute latent pair (second one will be original latent if run_baseline=True)
     latents = coupled_stablediffusion(
-        base_prompt,
+        prompt=base_prompt,
+        null_prompt="",
         reverse=True,
         init_image=orig_im,
         init_image_strength=init_image_strength,
@@ -109,8 +110,8 @@ def EDICT_editing(
     )
     # Denoise intermediate state with new conditioning
     gen = coupled_stablediffusion(
-        edit_prompt if (not use_p2p) else base_prompt,
-        None if (not use_p2p) else edit_prompt,
+        prompt=edit_prompt if (not use_p2p) else base_prompt,
+        null_prompt="",
         fixed_starting_latent=latents,
         init_image_strength=init_image_strength,
         steps=steps,
@@ -408,6 +409,8 @@ def coupled_stablediffusion(
     timesteps = schedulers[0].timesteps[t_limit:]
     if reverse:
         timesteps = timesteps.flip(0)
+    
+    text_emb = torch.cat([embedding_unconditional, embedding_conditional])
 
     for i, t in tqdm(enumerate(timesteps), total=len(timesteps)):
 
@@ -447,19 +450,15 @@ def coupled_stablediffusion(
             latent_model_input = latent_pair[latent_j]
             latent_base = latent_pair[latent_i]
 
+            latent_model_input = torch.cat([latent_model_input] * 2)
+
             # Predict the unconditional noise residual
-            noise_pred_uncond = unet(
-                latent_model_input, t, encoder_hidden_states=embedding_unconditional
+            noise_pred = unet(
+                latent_model_input, t, encoder_hidden_states=text_emb
             ).sample
 
-            # Predict the conditional noise residual and save the cross-attention layer activations
-            noise_pred_cond = unet(
-                latent_model_input, t, encoder_hidden_states=embedding_conditional
-            ).sample
-
-            # Perform guidance
-            grad = noise_pred_cond - noise_pred_uncond
-            noise_pred = noise_pred_uncond + guidance_scale * grad
+            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
             step_call = reverse_step if reverse else forward_step
             new_latent = step_call(
