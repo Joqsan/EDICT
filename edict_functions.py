@@ -7,6 +7,7 @@ from PIL import Image
 from torch import autocast
 from tqdm.auto import tqdm
 from transformers import CLIPModel, CLIPTokenizer
+from scheduling_edict import EDICTScheduler
 
 # Have diffusers with hardcoded double-casting instead of float
 from my_diffusers import (AutoencoderKL, DDIMScheduler, DDPMScheduler,
@@ -148,98 +149,6 @@ def load_im_into_format_from_path(im_path):
 
 #### HELPER FUNCTIONS FOR OUR METHOD #####
 
-
-def get_alpha_and_beta(t, scheduler):
-    # want to run this for both current and previous timnestep
-    if t.dtype == torch.long:
-        alpha = scheduler.alphas_cumprod[t]
-        return alpha, 1 - alpha
-
-    if t < 0:
-        return scheduler.final_alpha_cumprod, 1 - scheduler.final_alpha_cumprod
-
-    low = t.floor().long()
-    high = t.ceil().long()
-    rem = t - low
-
-    low_alpha = scheduler.alphas_cumprod[low]
-    high_alpha = scheduler.alphas_cumprod[high]
-    interpolated_alpha = low_alpha * rem + high_alpha * (1 - rem)
-    interpolated_beta = 1 - interpolated_alpha
-    return interpolated_alpha, interpolated_beta
-
-
-# A DDIM forward step function
-def forward_step(
-    self,
-    model_output,
-    timestep: int,
-    sample,
-    eta: float = 0.0,
-    use_clipped_model_output: bool = False,
-    generator=None,
-    return_dict: bool = True,
-    use_double=False,
-):
-    if self.num_inference_steps is None:
-        raise ValueError(
-            "Number of inference steps is 'None', you need to run 'set_timesteps' after creating the scheduler"
-        )
-
-    prev_timestep = (
-        timestep - self.config.num_train_timesteps / self.num_inference_steps
-    )
-
-    if timestep > self.timesteps.max():
-        raise NotImplementedError("Need to double check what the overflow is")
-
-    alpha_prod_t, beta_prod_t = get_alpha_and_beta(timestep, self)
-    alpha_prod_t_prev, _ = get_alpha_and_beta(prev_timestep, self)
-
-    alpha_quotient = (alpha_prod_t / alpha_prod_t_prev) ** 0.5
-    first_term = (1.0 / alpha_quotient) * sample
-    second_term = (1.0 / alpha_quotient) * (beta_prod_t**0.5) * model_output
-    third_term = ((1 - alpha_prod_t_prev) ** 0.5) * model_output
-    return first_term - second_term + third_term
-
-
-# A DDIM reverse step function, the inverse of above
-def reverse_step(
-    self,
-    model_output,
-    timestep: int,
-    sample,
-    eta: float = 0.0,
-    use_clipped_model_output: bool = False,
-    generator=None,
-    return_dict: bool = True,
-    use_double=False,
-):
-    if self.num_inference_steps is None:
-        raise ValueError(
-            "Number of inference steps is 'None', you need to run 'set_timesteps' after creating the scheduler"
-        )
-
-    prev_timestep = (
-        timestep - self.config.num_train_timesteps / self.num_inference_steps
-    )
-
-    if timestep > self.timesteps.max():
-        raise NotImplementedError
-    else:
-        alpha_prod_t = self.alphas_cumprod[timestep]
-
-    alpha_prod_t, beta_prod_t = get_alpha_and_beta(timestep, self)
-    alpha_prod_t_prev, _ = get_alpha_and_beta(prev_timestep, self)
-
-    alpha_quotient = (alpha_prod_t / alpha_prod_t_prev) ** 0.5
-
-    first_term = alpha_quotient * sample
-    second_term = ((beta_prod_t) ** 0.5) * model_output
-    third_term = alpha_quotient * ((1 - alpha_prod_t_prev) ** 0.5) * model_output
-    return first_term + second_term - third_term
-
-
 @torch.no_grad()
 def latent_to_image(latent):
     image = vae.decode(latent.to(vae.dtype) / 0.18215).sample
@@ -370,14 +279,7 @@ def coupled_stablediffusion(
             return prep_image_for_return(image)
 
     # Set inference timesteps to scheduler
-    scheduler = DDIMScheduler(
-            beta_start=0.00085,
-            beta_end=0.012,
-            beta_schedule=beta_schedule,
-            num_train_timesteps=1000,
-            clip_sample=False,
-            set_alpha_to_one=False,
-        )
+    scheduler = EDICTScheduler()
     scheduler.set_timesteps(steps)
 
     # CLIP Text Embeddings
@@ -459,9 +361,9 @@ def coupled_stablediffusion(
             noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
             noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
-            step_call = reverse_step if reverse else forward_step
+            step_call = scheduler.reverse_step if reverse else scheduler.forward_step
             new_latent = step_call(
-                scheduler, noise_pred, t, latent_base
+                sample=latent_base, model_output=noise_pred, timestep=t
             )  # .prev_sample
             new_latent = new_latent.to(latent_base.dtype)
 
