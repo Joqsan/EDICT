@@ -59,12 +59,10 @@ def EDICT_editing(
     im_path,
     base_prompt,
     edit_prompt,
-    use_p2p=False,
     steps=50,
     mix_weight=0.93,
     init_image_strength=0.8,
     guidance_scale=3,
-    run_baseline=False,
     leapfrog_steps=True
 ):
     """
@@ -85,20 +83,12 @@ def EDICT_editing(
         guidance_scale: classifier-free guidance scale
             3 I've found is the best for both our method and basic DDIM inversion
             Higher can result in more distorted results
-        run_baseline:
-            VERY IMPORTANT
-            True is EDICT, False is DDIM
-    Output:
-        PAIR of Images (tuple)
-        If run_baseline=True then [0] will be edit and [1] will be original
-        If run_baseline=False then they will be two nearly identical edited versions
     """
     # Resize/center crop to 512x512 (Can do higher res. if desired)
     orig_im = (
         load_im_into_format_from_path(im_path) if isinstance(im_path, str) else im_path
     )  # trust OK
 
-    # compute latent pair (second one will be original latent if run_baseline=True)
     latents = coupled_stablediffusion(
         prompt=base_prompt,
         null_prompt="",
@@ -108,19 +98,17 @@ def EDICT_editing(
         steps=steps,
         mix_weight=mix_weight,
         guidance_scale=guidance_scale,
-        run_baseline=run_baseline,
         leapfrog_steps=leapfrog_steps
     )
     # Denoise intermediate state with new conditioning
     gen = coupled_stablediffusion(
-        prompt=edit_prompt if (not use_p2p) else base_prompt,
+        prompt=edit_prompt,
         null_prompt="",
         fixed_starting_latent=latents,
         init_image_strength=init_image_strength,
         steps=steps,
         mix_weight=mix_weight,
         guidance_scale=guidance_scale,
-        run_baseline=run_baseline,
         leapfrog_steps=leapfrog_steps
     )
 
@@ -181,7 +169,6 @@ def coupled_stablediffusion(
     height=512,
     init_image=None,
     init_image_strength=1.0,
-    run_baseline=False,
     use_lms=False,
     leapfrog_steps=True,
     reverse=False,
@@ -225,8 +212,7 @@ def coupled_stablediffusion(
             return init_latent
 
     assert not use_lms, "Can't invert LMS the same as DDIM"
-    if run_baseline:
-        leapfrog_steps = False
+    
     # Change size to multiple of 64 to prevent size mismatches inside model
     width = width - width % 64
     height = height - height % 64
@@ -315,24 +301,13 @@ def coupled_stablediffusion(
 
     for i, t in tqdm(enumerate(timesteps), total=len(timesteps)):
 
-        if (reverse) and (not run_baseline):
-            # Reverse mixing layer
-            new_latents = [l.clone() for l in latent_pair]
-            new_latents[1] = (
-                new_latents[1].clone() - (1 - mix_weight) * new_latents[0].clone()
-            ) / mix_weight
-            new_latents[0] = (
-                new_latents[0].clone() - (1 - mix_weight) * new_latents[1].clone()
-            ) / mix_weight
-            latent_pair = new_latents
+        if reverse:
+            latent_pair = scheduler.reverse_mixing_layer(latent_pair[0], latent_pair[1])
 
         # alternate EDICT steps
         for latent_i in range(2):
-            if run_baseline and latent_i == 1:
-                continue  # just have one sequence for baseline
-            # this modifies latent_pair[i] while using
-            # latent_pair[(i+1)%2]
-            if reverse and (not run_baseline):
+            
+            if reverse:
                 if leapfrog_steps:
                     # what i would be from going other way
                     orig_i = len(timesteps) - (i + 1)
@@ -346,14 +321,13 @@ def coupled_stablediffusion(
                     offset = i % 2
                     latent_i = (latent_i + offset) % 2
 
-            latent_j = ((latent_i + 1) % 2) if not run_baseline else latent_i
+            latent_j = ((latent_i + 1) % 2)
 
-            latent_model_input = latent_pair[latent_j]
-            latent_base = latent_pair[latent_i]
+            model_input = latent_pair[latent_j]
+            base = latent_pair[latent_i]
 
-            latent_model_input = torch.cat([latent_model_input] * 2)
+            latent_model_input = torch.cat([model_input] * 2)
 
-            # Predict the unconditional noise residual
             noise_pred = unet(
                 latent_model_input, t, encoder_hidden_states=text_emb
             ).sample
@@ -361,25 +335,19 @@ def coupled_stablediffusion(
             noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
             noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
-            step_call = scheduler.reverse_step if reverse else scheduler.forward_step
-            new_latent = step_call(
-                sample=latent_base, model_output=noise_pred, timestep=t
-            )  # .prev_sample
-            new_latent = new_latent.to(latent_base.dtype)
+            if reverse:
+                new_latent = scheduler.reverse_step(sample=base, model_output=noise_pred, timestep=t)
+            else:
+                 new_latent = scheduler.forward_step(sample=base, model_output=noise_pred, timestep=t)
+                
+            new_latent = new_latent.to(base.dtype)
 
             latent_pair[latent_i] = new_latent
 
-        if (not reverse) and (not run_baseline):
-            # Mixing layer (contraction) during generative process
-            new_latents = [l.clone() for l in latent_pair]
-            new_latents[0] = (
-                mix_weight * new_latents[0] + (1 - mix_weight) * new_latents[1]
-            ).clone()
-            new_latents[1] = (
-                (1 - mix_weight) * new_latents[0] + (mix_weight) * new_latents[1]
-            ).clone()
-            latent_pair = new_latents
+        if not reverse:
+            latent_pair = scheduler.forward_mixing_layer(latent_pair[0], latent_pair[1])
 
+    latent_pair = list(latent_pair)
     # scale and decode the image latents with vae, can return latents instead of images
     if reverse or return_latents:
         results = [latent_pair]

@@ -40,6 +40,7 @@ class EDICTScheduler(SchedulerMixin, ConfigMixin):
     def __init__(
         self,
         num_train_timesteps: int = 1000,
+        mix_weight=0.93,
         beta_start: float = 0.00085,
         beta_end: float = 0.012,
         beta_schedule: str = "scaled_linear",
@@ -62,6 +63,7 @@ class EDICTScheduler(SchedulerMixin, ConfigMixin):
         else:
             raise NotImplementedError(f"{beta_schedule} does is not implemented for {self.__class__}")
 
+        self.mix_weight = mix_weight
         self.alphas = 1.0 - self.betas
         self.alphas_cumprod = np.cumprod(self.alphas, axis=0)
 
@@ -105,7 +107,7 @@ class EDICTScheduler(SchedulerMixin, ConfigMixin):
     def _get_alpha_and_beta(self, t):
         # want to run this for both current and previous timnestep
         t = int(t)
-        
+
         alpha_prod = self.alphas_cumprod[t] if t >= 0 else self.final_alpha_cumprod
 
         return alpha_prod, 1 - alpha_prod
@@ -168,3 +170,14 @@ class EDICTScheduler(SchedulerMixin, ConfigMixin):
         second_term = ((beta_prod_t) ** 0.5) * model_output
         third_term = alpha_quotient * ((1 - alpha_prod_t_prev) ** 0.5) * model_output
         return first_term + second_term - third_term
+    
+    def reverse_mixing_layer(self, base, model_input):
+        model_input = (model_input - (1 - self.mix_weight) * base) / self.mix_weight
+        base = (base - (1 - self.mix_weight) * base) / self.mix_weight
+
+        return [base, model_input]
+
+    def forward_mixing_layer(self, base, model_input):
+        base = self.mix_weight * base + (1 - self.mix_weight) * model_input
+        model_input = (self.mix_weight) * model_input + (1 - self.mix_weight) * base
+        return [base, model_input]
