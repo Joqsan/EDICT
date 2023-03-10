@@ -370,10 +370,7 @@ def coupled_stablediffusion(
             return prep_image_for_return(image)
 
     # Set inference timesteps to scheduler
-    schedulers = []
-    for i in range(2):
-        # num_raw_timesteps = max(1000, steps)
-        scheduler = DDIMScheduler(
+    scheduler = DDIMScheduler(
             beta_start=0.00085,
             beta_end=0.012,
             beta_schedule=beta_schedule,
@@ -381,8 +378,7 @@ def coupled_stablediffusion(
             clip_sample=False,
             set_alpha_to_one=False,
         )
-        scheduler.set_timesteps(steps)
-        schedulers.append(scheduler)
+    scheduler.set_timesteps(steps)
 
     # CLIP Text Embeddings
     tokens_unconditional = clip_tokenizer(
@@ -409,7 +405,7 @@ def coupled_stablediffusion(
         tokens_conditional.input_ids.to(device)
     ).last_hidden_state
 
-    timesteps = schedulers[0].timesteps[t_limit:]
+    timesteps = scheduler.timesteps[t_limit:]
     if reverse:
         timesteps = timesteps.flip(0)
     
@@ -465,7 +461,7 @@ def coupled_stablediffusion(
 
             step_call = reverse_step if reverse else forward_step
             new_latent = step_call(
-                schedulers[latent_i], noise_pred, t, latent_base
+                scheduler, noise_pred, t, latent_base
             )  # .prev_sample
             new_latent = new_latent.to(latent_base.dtype)
 
