@@ -64,6 +64,7 @@ def EDICT_editing(
     init_image_strength=0.8,
     guidance_scale=3,
     run_baseline=False,
+    leapfrog_steps=True
 ):
     """
     Main call of our research, performs editing with either EDICT or DDIM
@@ -107,6 +108,7 @@ def EDICT_editing(
         mix_weight=mix_weight,
         guidance_scale=guidance_scale,
         run_baseline=run_baseline,
+        leapfrog_steps=leapfrog_steps
     )
     # Denoise intermediate state with new conditioning
     gen = coupled_stablediffusion(
@@ -118,6 +120,7 @@ def EDICT_editing(
         mix_weight=mix_weight,
         guidance_scale=guidance_scale,
         run_baseline=run_baseline,
+        leapfrog_steps=leapfrog_steps
     )
 
     return gen
