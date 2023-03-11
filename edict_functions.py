@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image
 from torch import autocast
 from tqdm.auto import tqdm
-from transformers import CLIPModel, CLIPTokenizer
+from transformers import CLIPTextModel, CLIPTokenizer
 from scheduling_edict import EDICTScheduler
 
 # Have diffusers with hardcoded double-casting instead of float
@@ -23,8 +23,7 @@ from my_diffusers.schedulers.scheduling_utils import SchedulerOutput
 # Build our CLIP model
 model_path_clip = "openai/clip-vit-large-patch14"
 clip_tokenizer = CLIPTokenizer.from_pretrained(model_path_clip)
-clip_model = CLIPModel.from_pretrained(model_path_clip, torch_dtype=torch.float16)
-clip = clip_model.text_model
+clip = CLIPTextModel.from_pretrained(model_path_clip, torch_dtype=torch.float16)
 
 
 # Getting our HF Auth token
