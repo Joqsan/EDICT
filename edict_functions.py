@@ -259,43 +259,41 @@ def coupled_stablediffusion_noising(
 
     timesteps = scheduler.timesteps[t_limit:]
     timesteps = timesteps.flip(0)
-    
+
+    timesteps = timesteps.repeat_interleave(2)
+
+    base, model_input = latent_pair[1], latent_pair[0]
+    do_mixing_now = True
     for i, t in tqdm(enumerate(timesteps), total=len(timesteps)):
+        
+        if do_mixing_now:
+            base, model_input = scheduler.reverse_mixing_layer(base, model_input)
 
-        latent_pair = scheduler.reverse_mixing_layer(latent_pair[0], latent_pair[1])
-
-        # alternate EDICT steps
-        for latent_i in range(2):
+            
             if leapfrog_steps:
-                # what i would be from going other way
-                orig_i = len(timesteps) - (i + 1)
-                offset = (orig_i + 1) % 2
-                latent_i = (latent_i + offset) % 2
-            else:
-                # Do 1 then 0
-                latent_i = (latent_i + 1) % 2
-
-            latent_j = ((latent_i + 1) % 2)
-
-            model_input = latent_pair[latent_j]
-            base = latent_pair[latent_i]
-
-            latent_model_input = torch.cat([model_input] * 2)
-
-            noise_pred = unet(
-                latent_model_input, t, encoder_hidden_states=text_emb
-            ).sample
-
-            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-
-            new_latent = scheduler.reverse_step(sample=base, model_output=noise_pred, timestep=t)
-            new_latent = new_latent.to(base.dtype)
-
-            latent_pair[latent_i] = new_latent
+                base, model_input = model_input, base
 
 
-    latent_pair = list(latent_pair)
+        latent_model_input = torch.cat([model_input] * 2)
+
+        noise_pred = unet(
+            latent_model_input, t, encoder_hidden_states=text_emb
+        ).sample
+
+        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+        noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+        new_latent = scheduler.reverse_step(sample=base, model_output=noise_pred, timestep=t)
+        new_latent = new_latent.to(base.dtype)
+        do_mixing_now ^= True
+
+        base = model_input
+        model_input = new_latent
+
+    if not leapfrog_steps:
+        base, model_input = model_input, base
+
+    latent_pair = [base, model_input]
     results = [latent_pair]
     return results if len(results) > 1 else results[0]
 
