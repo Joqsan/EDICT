@@ -262,7 +262,7 @@ def coupled_stablediffusion_noising(
 
     timesteps = timesteps.repeat_interleave(2)
 
-    base, model_input = latent_pair[1], latent_pair[0]
+    base, model_input = latent_pair[0], latent_pair[1]
     do_mixing_now = True
     for i, t in tqdm(enumerate(timesteps), total=len(timesteps)):
         
