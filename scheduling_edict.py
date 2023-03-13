@@ -115,6 +115,7 @@ class EDICTScheduler(SchedulerMixin, ConfigMixin):
     def forward_step(
         self,
         sample,
+        model_input,
         model_output,
         timestep: int,
         eta: float = 0.0,
@@ -139,11 +140,14 @@ class EDICTScheduler(SchedulerMixin, ConfigMixin):
         first_term = (1.0 / alpha_quotient) * sample
         second_term = (1.0 / alpha_quotient) * (beta_prod_t**0.5) * model_output
         third_term = ((1 - alpha_prod_t_prev) ** 0.5) * model_output
-        return first_term - second_term + third_term
+
+        next_model_input = first_term - second_term + third_term
+        return model_input, next_model_input
     
     def reverse_step(
         self,
         sample,
+        model_input,
         model_output,
         timestep: int,
         eta: float = 0.0,
@@ -169,7 +173,9 @@ class EDICTScheduler(SchedulerMixin, ConfigMixin):
         first_term = alpha_quotient * sample
         second_term = ((beta_prod_t) ** 0.5) * model_output
         third_term = alpha_quotient * ((1 - alpha_prod_t_prev) ** 0.5) * model_output
-        return first_term + second_term - third_term
+
+        next_model_input = first_term + second_term - third_term
+        return model_input, next_model_input
     
     def reverse_mixing_layer(self, base, model_input):
         model_input = (model_input - (1 - self.mix_weight) * base) / self.mix_weight
