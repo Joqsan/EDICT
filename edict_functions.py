@@ -289,8 +289,8 @@ def coupled_stablediffusion(
     base_embeds = encode_prompt(base_prompt)
     target_embeds = encode_prompt(target_prompt)
 
-    fwd_timesteps = scheduler.timesteps[t_limit:].repeat_interleave(2)
-    bwd_timesteps = fwd_timesteps.flip(0)
+    bwd_timesteps = scheduler.timesteps[t_limit:].repeat_interleave(2)  # 780, 780, ...
+    fwd_timesteps = bwd_timesteps.flip(0)  # 0, 0, ....
 
 
     # Do noising loop
