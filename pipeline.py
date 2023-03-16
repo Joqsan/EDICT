@@ -3,7 +3,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 from scheduling_edict import EDICTScheduler
 from diffusers import AutoencoderKL, UNet2DConditionModel
 import torch
-import tqdm
+from tqdm.auto import tqdm
 
 from typing import Union
 import PIL
@@ -121,7 +121,8 @@ class Pipeline:
         image = image.to(device=device, dtype=text_emb.dtype)
         init_latents = self.vae.encode(image).latent_dist.sample(generator)\
         
-        init_latents = self.vae.config.scaling_factor * init_latents
+        # init_latents = self.vae.config.scaling_factor * init_latents
+        init_latents = 0.18215 * init_latents
 
         base, model_input = init_latents.clone(), init_latents.clone()
 
@@ -156,7 +157,8 @@ class Pipeline:
         return base, model_input
 
     def decode_latents(self, latents):
-        latents = 1 / self.vae.config.scaling_factor * latents
+        # latents = 1 / self.vae.config.scaling_factor * latents
+        latents = 1 / 0.18215 * latents
         image = self.vae.decode(latents).sample
         image = (image / 2 + 0.5).clamp(0, 1)
         image = image.cpu().permute(0, 2, 3, 1).float().numpy()
@@ -233,7 +235,7 @@ class Pipeline:
 
 
         image = self.decode_latents(final_latent)
-        image = (image * 255).round().astype("uint8")
+        image = (image[0] * 255).round().astype("uint8")
         pil_image = Image.fromarray(image)
 
         return pil_image

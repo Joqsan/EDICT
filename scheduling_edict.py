@@ -2,6 +2,7 @@ import math
 from typing import Optional
 
 import numpy as np
+import torch
 
 from my_diffusers.configuration_utils import ConfigMixin, register_to_config
 from my_diffusers.schedulers.scheduling_utils import SchedulerMixin
@@ -97,40 +98,14 @@ class EDICTScheduler(SchedulerMixin, ConfigMixin):
 
         # print(self.alphas.shape)
 
-    def set_timesteps(self, num_inference_steps: int, offset: int = 0):
-        """
-        Sets the discrete timesteps used for the diffusion chain. Supporting function to be run before inference.
-
-        Args:
-            num_inference_steps (`int`):
-                the number of diffusion steps used when generating samples with a pre-trained model.
-            offset (`int`): TODO
-        """
+    def set_timesteps(self, num_inference_steps: int, device):
         self.num_inference_steps = num_inference_steps
-        if num_inference_steps <= 1000:
-            self.timesteps = (
-                np.arange(
-                    0,
-                    self.config.num_train_timesteps,
-                    self.config.num_train_timesteps // self.num_inference_steps,
-                )[::-1]
-                .copy()
-                .astype(np.int64)
-            )
-        else:
-            print("Hitting new logic, allowing fractional timesteps")
-            self.timesteps = (
-                np.linspace(
-                    0,
-                    self.config.num_train_timesteps - 1,
-                    self.num_inference_steps,
-                    endpoint=True,
-                )[::-1]
-                .copy()
-                .astype(np.int64)
-            )
-        self.timesteps += offset
-        self.set_format(tensor_format=self.tensor_format)
+        step_ratio = self.config.num_train_timesteps // self.num_inference_steps
+        # creates integer timesteps by multiplying by ratio
+        # casting to int to avoid issues when num_inference_step is power of 3
+        timesteps = (np.arange(0, num_inference_steps) * step_ratio).round()[::-1].copy().astype(np.int64)
+        self.timesteps = torch.from_numpy(timesteps).to(device)
+        
 
     def _get_alpha_and_beta(self, t):
         # want to run this for both current and previous timnestep
