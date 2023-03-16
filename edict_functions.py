@@ -259,8 +259,8 @@ def coupled_stablediffusion(
             return init_latent
     
     # Change size to multiple of 64 to prevent size mismatches inside model
-    width = width - width % 64
-    height = height - height % 64
+    width = width - width % 8
+    height = height - height % 8
 
     # Preprocess image if it exists (img2img)
     if isinstance(init_image, list):
