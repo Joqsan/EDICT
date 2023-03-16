@@ -1,8 +1,10 @@
-from typing import Optional
-import numpy as np
 import math
-from my_diffusers.schedulers.scheduling_utils import SchedulerMixin, SchedulerOutput
+from typing import Optional
+
+import numpy as np
+
 from my_diffusers.configuration_utils import ConfigMixin, register_to_config
+from my_diffusers.schedulers.scheduling_utils import SchedulerMixin
 
 
 def betas_for_alpha_bar(num_diffusion_timesteps, max_beta=0.999):
@@ -34,7 +36,6 @@ def betas_for_alpha_bar(num_diffusion_timesteps, max_beta=0.999):
     return np.array(betas, dtype=np.float64)
 
 
-
 class EDICTScheduler(SchedulerMixin, ConfigMixin):
     @register_to_config
     def __init__(
@@ -53,15 +54,27 @@ class EDICTScheduler(SchedulerMixin, ConfigMixin):
         if trained_betas is not None:
             self.betas = np.asarray(trained_betas)
         if beta_schedule == "linear":
-            self.betas = np.linspace(beta_start, beta_end, num_train_timesteps, dtype=np.float64)
+            self.betas = np.linspace(
+                beta_start, beta_end, num_train_timesteps, dtype=np.float64
+            )
         elif beta_schedule == "scaled_linear":
             # this schedule is very specific to the latent diffusion model.
-            self.betas = np.linspace(beta_start**0.5, beta_end**0.5, num_train_timesteps, dtype=np.float64) ** 2
+            self.betas = (
+                np.linspace(
+                    beta_start**0.5,
+                    beta_end**0.5,
+                    num_train_timesteps,
+                    dtype=np.float64,
+                )
+                ** 2
+            )
         elif beta_schedule == "squaredcos_cap_v2":
             # Glide cosine schedule
             self.betas = betas_for_alpha_bar(num_train_timesteps)
         else:
-            raise NotImplementedError(f"{beta_schedule} does is not implemented for {self.__class__}")
+            raise NotImplementedError(
+                f"{beta_schedule} does is not implemented for {self.__class__}"
+            )
 
         self.mix_weight = mix_weight
         self.alphas = 1.0 - self.betas
@@ -71,7 +84,9 @@ class EDICTScheduler(SchedulerMixin, ConfigMixin):
         # For the final step, there is no previous alphas_cumprod because we are already at 0
         # `set_alpha_to_one` decides whether we set this paratemer simply to one or
         # whether we use the final alpha of the "non-previous" one.
-        self.final_alpha_cumprod = np.array(1.0) if set_alpha_to_one else self.alphas_cumprod[0]
+        self.final_alpha_cumprod = (
+            np.array(1.0) if set_alpha_to_one else self.alphas_cumprod[0]
+        )
 
         # setable values
         self.num_inference_steps = None
@@ -79,9 +94,9 @@ class EDICTScheduler(SchedulerMixin, ConfigMixin):
 
         self.tensor_format = tensor_format
         self.set_format(tensor_format=tensor_format)
-        
+
         # print(self.alphas.shape)
-    
+
     def set_timesteps(self, num_inference_steps: int, offset: int = 0):
         """
         Sets the discrete timesteps used for the diffusion chain. Supporting function to be run before inference.
@@ -93,14 +108,27 @@ class EDICTScheduler(SchedulerMixin, ConfigMixin):
         """
         self.num_inference_steps = num_inference_steps
         if num_inference_steps <= 1000:
-            self.timesteps = np.arange(
-                0, self.config.num_train_timesteps, self.config.num_train_timesteps // self.num_inference_steps
-        )[::-1].copy().astype(np.int64)
+            self.timesteps = (
+                np.arange(
+                    0,
+                    self.config.num_train_timesteps,
+                    self.config.num_train_timesteps // self.num_inference_steps,
+                )[::-1]
+                .copy()
+                .astype(np.int64)
+            )
         else:
             print("Hitting new logic, allowing fractional timesteps")
-            self.timesteps = np.linspace(
-                0, self.config.num_train_timesteps-1, self.num_inference_steps, endpoint=True
-        )[::-1].copy().astype(np.int64)
+            self.timesteps = (
+                np.linspace(
+                    0,
+                    self.config.num_train_timesteps - 1,
+                    self.num_inference_steps,
+                    endpoint=True,
+                )[::-1]
+                .copy()
+                .astype(np.int64)
+            )
         self.timesteps += offset
         self.set_format(tensor_format=self.tensor_format)
 
@@ -143,7 +171,7 @@ class EDICTScheduler(SchedulerMixin, ConfigMixin):
 
         next_model_input = first_term - second_term + third_term
         return model_input, next_model_input
-    
+
     def reverse_step(
         self,
         sample,
@@ -176,7 +204,7 @@ class EDICTScheduler(SchedulerMixin, ConfigMixin):
 
         next_model_input = first_term + second_term - third_term
         return model_input, next_model_input
-    
+
     def reverse_mixing_layer(self, base, model_input):
         model_input = (model_input - (1 - self.mix_weight) * base) / self.mix_weight
         base = (base - (1 - self.mix_weight) * base) / self.mix_weight
