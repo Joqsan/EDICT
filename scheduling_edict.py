@@ -137,15 +137,19 @@ class EDICTScheduler(SchedulerMixin, ConfigMixin):
         )
 
         alpha_prod_t, beta_prod_t = self._get_alpha_and_beta(timestep)
-        alpha_prod_t_prev, _ = self._get_alpha_and_beta(prev_timestep)
+        alpha_prod_t_prev, beta_prod_t_prev = self._get_alpha_and_beta(prev_timestep)
+
+        a_t = (alpha_prod_t_prev / alpha_prod_t) ** 0.5
+        b_t = - a_t * (beta_prod_t ** 0.5) + beta_prod_t_prev ** 0.5
+        next_model_input_1 = a_t * sample + b_t * model_output
 
         alpha_quotient = (alpha_prod_t / alpha_prod_t_prev) ** 0.5
         first_term = (1.0 / alpha_quotient) * sample
         second_term = (1.0 / alpha_quotient) * (beta_prod_t**0.5) * model_output
         third_term = ((1 - alpha_prod_t_prev) ** 0.5) * model_output
 
-        next_model_input = first_term - second_term + third_term
-        return model_input, next_model_input
+        next_model_input_2 = first_term - second_term + third_term
+        return model_input, next_model_input_2
 
     def reverse_step(
         self,
@@ -169,7 +173,13 @@ class EDICTScheduler(SchedulerMixin, ConfigMixin):
         )
 
         alpha_prod_t, beta_prod_t = self._get_alpha_and_beta(timestep)
-        alpha_prod_t_prev, _ = self._get_alpha_and_beta(prev_timestep)
+        alpha_prod_t_prev, beta_prod_t_prev = self._get_alpha_and_beta(prev_timestep)
+
+
+        a_t = (alpha_prod_t_prev / alpha_prod_t) ** 0.5
+        b_t = - a_t * (beta_prod_t ** 0.5) + beta_prod_t_prev ** 0.5
+
+        next_model_input_1 = (sample - b_t * model_output) /  a_t
 
         alpha_quotient = (alpha_prod_t / alpha_prod_t_prev) ** 0.5
 
@@ -177,8 +187,8 @@ class EDICTScheduler(SchedulerMixin, ConfigMixin):
         second_term = ((beta_prod_t) ** 0.5) * model_output
         third_term = alpha_quotient * ((1 - alpha_prod_t_prev) ** 0.5) * model_output
 
-        next_model_input = first_term + second_term - third_term
-        return model_input, next_model_input
+        next_model_input_2 = first_term + second_term - third_term
+        return model_input, next_model_input_2
 
     def reverse_mixing_layer(self, base, model_input):
         model_input = (model_input - (1 - self.mix_weight) * base) / self.mix_weight
