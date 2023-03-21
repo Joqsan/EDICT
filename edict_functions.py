@@ -178,37 +178,63 @@ def encode_prompt(text_prompt):
 
 
 def run_noising_loop(latents, text_emb, timesteps, guidance_scale, leapfrog_steps, unet, scheduler):
-    base, model_input = latents[1], latents[0]
+    latents = list(latents)
+
+    base, model_input = latents[0], latents[1]
 
     do_mixing_now = True
     for i, t in tqdm(enumerate(timesteps), total=len(timesteps)):
 
-        # 1. Do mixing
-        if do_mixing_now:
-            base, model_input = scheduler.reverse_mixing_layer(base, model_input)
+        base, model_input = scheduler.reverse_mixing_layer(base, model_input)
 
-            # 2. Do swap after calling reverse_mixing_layer and before computing eq. (15.2)
+        for latent_i in range(2):
             if leapfrog_steps:
-                base, model_input = model_input, base
+                # what i would be from going other way
+                orig_i = len(timesteps) - (i + 1)
+                offset = (orig_i + 1) % 2
+                latent_i = (latent_i + offset) % 2
+            else:
+                # Do 1 then 0
+                latent_i = (latent_i + 1) % 2
+
+            latent_j = ((latent_i + 1) % 2)
+
+            model_input = latents[latent_j]
+            base = latents[latent_i]
+
+            latent_model_input = torch.cat([model_input] * 2)
+
+            noise_pred = unet(
+                latent_model_input, t, encoder_hidden_states=text_emb
+            ).sample
+
+            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+            base, model_input = scheduler.reverse_step(sample=base, model_input=model_input, model_output=noise_pred, timestep=t)
+            model_input = model_input.to(base.dtype)
+
+            latents[latent_i] = model_input
+
         
-        # 3. Compute Unet
-        latent_model_input = torch.cat([model_input] * 2)
+    #     # 3. Compute Unet
+    #     latent_model_input = torch.cat([model_input] * 2)
 
-        noise_pred = unet(
-            latent_model_input, t, encoder_hidden_states=text_emb
-        ).sample
+    #     noise_pred = unet(
+    #         latent_model_input, t, encoder_hidden_states=text_emb
+    #     ).sample
 
-        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-        noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+    #     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+    #     noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
         
-        # 4. Do noise step
-        base, model_input = scheduler.reverse_step(sample=base, model_input=model_input, model_output=noise_pred, timestep=t)
-        do_mixing_now ^= True
+    #     # 4. Do noise step
+    #     base, model_input = scheduler.reverse_step(sample=base, model_input=model_input, model_output=noise_pred, timestep=t)
+    #     do_mixing_now ^= True
 
-    if not leapfrog_steps:
-        base, model_input = model_input, base
+    # if not leapfrog_steps:
+    #     base, model_input = model_input, base
 
-    return base, model_input
+    return latents
 
 @torch.no_grad()
 def coupled_stablediffusion(
@@ -289,42 +315,69 @@ def coupled_stablediffusion(
     base_embeds = encode_prompt(base_prompt)
     target_embeds = encode_prompt(target_prompt)
 
-    bwd_timesteps = scheduler.timesteps[t_limit:].repeat_interleave(2)  # 780, 780, ...
-    fwd_timesteps = bwd_timesteps.flip(0)  # 0, 0, ....
+    bwd_timesteps = scheduler.timesteps[t_limit:]
+    fwd_timesteps = bwd_timesteps.flip(0)
 
 
     # Do noising loop
-    base, model_input = run_noising_loop(latent_pair, base_embeds, fwd_timesteps, guidance_scale, leapfrog_steps, unet, scheduler)
+    latent_pair = run_noising_loop(latent_pair, base_embeds, fwd_timesteps, guidance_scale, leapfrog_steps, unet, scheduler)
     
     do_mixing_now = True
     # Do denoising loop (right here)
     for i, t in tqdm(enumerate(bwd_timesteps), total=len(bwd_timesteps)):
+        # alternate EDICT steps
+        for latent_i in range(2):
         
-
-        # 1. Compute Unet
-        latent_model_input = torch.cat([model_input] * 2)
-
-        noise_pred = unet(
-            latent_model_input, t, encoder_hidden_states=target_embeds
-        ).sample
-
-        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-        noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-
-        # 2. Do denoise step
-        base, model_input = scheduler.forward_step(sample=base, model_input=model_input, model_output=noise_pred, timestep=t)
-        do_mixing_now ^= True
-
-        # 3. Do mixing
-        if do_mixing_now:
-
-            base, model_input = scheduler.forward_mixing_layer(base, model_input)
-            # 4. Do swap after calling forward_mixing_layer and before computing (14.1) 
-            # for the next iteration (that is, at the end of the current iteration).
             if leapfrog_steps:
-                base, model_input = model_input, base
+                offset = i % 2
+                latent_i = (latent_i + offset) % 2
 
-    latent_pair = [base, model_input]
+            latent_j = ((latent_i + 1) % 2)
+
+            model_input = latent_pair[latent_j]
+            base = latent_pair[latent_i]
+
+            latent_model_input = torch.cat([model_input] * 2)
+
+            noise_pred = unet(
+                latent_model_input, t, encoder_hidden_states=target_embeds
+            ).sample
+
+            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+            base, model_input = scheduler.forward_step(sample=base, model_input=model_input, model_output=noise_pred, timestep=t)
+                
+            model_input = model_input.to(base.dtype)
+
+            latent_pair[latent_i] = model_input
+        
+        latent_pair = scheduler.forward_mixing_layer(latent_pair[0], latent_pair[1])
+
+        # # 1. Compute Unet
+        # latent_model_input = torch.cat([model_input] * 2)
+
+        # noise_pred = unet(
+        #     latent_model_input, t, encoder_hidden_states=target_embeds
+        # ).sample
+
+        # noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+        # noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+        # # 2. Do denoise step
+        # base, model_input = scheduler.forward_step(sample=base, model_input=model_input, model_output=noise_pred, timestep=t)
+        # do_mixing_now ^= True
+
+        # # 3. Do mixing
+        # if do_mixing_now:
+
+        #     base, model_input = scheduler.forward_mixing_layer(base, model_input)
+        #     # 4. Do swap after calling forward_mixing_layer and before computing (14.1) 
+        #     # for the next iteration (that is, at the end of the current iteration).
+        #     if leapfrog_steps:
+        #         base, model_input = model_input, base
+
+    latent_pair = list(latent_pair)
 
     # decode latents to iamges
     images = []
