@@ -139,85 +139,61 @@ def load_im_into_format_from_path(im_path):
 #### HELPER FUNCTIONS FOR OUR METHOD #####
 
 
-def get_alpha_and_beta(t, scheduler):
-    # want to run this for both current and previous timnestep
-    if t.dtype == torch.long:
-        alpha = scheduler.alphas_cumprod[t]
-        return alpha, 1 - alpha
+def get_alpha_and_beta(self, t):
+    t = int(t)
 
-    if t < 0:
-        return scheduler.final_alpha_cumprod, 1 - scheduler.final_alpha_cumprod
+    alpha_prod = self.alphas_cumprod[t] if t >= 0 else self.final_alpha_cumprod
 
-    low = t.floor().long()
-    high = t.ceil().long()
-    rem = t - low
-
-    low_alpha = scheduler.alphas_cumprod[low]
-    high_alpha = scheduler.alphas_cumprod[high]
-    interpolated_alpha = low_alpha * rem + high_alpha * (1 - rem)
-    interpolated_beta = 1 - interpolated_alpha
-    return interpolated_alpha, interpolated_beta
+    return alpha_prod, 1 - alpha_prod
 
 
 # A DDIM forward step function
 def forward_step(
     self,
+    base,
+    model_input,
     model_output,
     timestep: int,
-    sample,
 ):
-    if self.num_inference_steps is None:
-        raise ValueError(
-            "Number of inference steps is 'None', you need to run 'set_timesteps' after creating the scheduler"
-        )
-
+    
     prev_timestep = (
         timestep - self.config.num_train_timesteps / self.num_inference_steps
     )
 
-    if timestep > self.timesteps.max():
-        raise NotImplementedError("Need to double check what the overflow is")
+    alpha_prod_t, beta_prod_t = get_alpha_and_beta(self, timestep)
+    alpha_prod_t_prev, beta_prod_t_prev = get_alpha_and_beta(self, prev_timestep)
 
-    alpha_prod_t, beta_prod_t = get_alpha_and_beta(timestep, self)
-    alpha_prod_t_prev, _ = get_alpha_and_beta(prev_timestep, self)
+    a_t = (alpha_prod_t_prev / alpha_prod_t) ** 0.5
+    b_t = - a_t * (beta_prod_t ** 0.5) + beta_prod_t_prev ** 0.5
+    next_model_input = a_t * base + b_t * model_output
 
-    alpha_quotient = (alpha_prod_t / alpha_prod_t_prev) ** 0.5
-    first_term = (1.0 / alpha_quotient) * sample
-    second_term = (1.0 / alpha_quotient) * (beta_prod_t**0.5) * model_output
-    third_term = ((1 - alpha_prod_t_prev) ** 0.5) * model_output
-    return first_term - second_term + third_term
+    return model_input, next_model_input
 
 
 # A DDIM reverse step function, the inverse of above
 def reverse_step(
     self,
+    base,
+    model_input,
     model_output,
     timestep: int,
-    sample,
 ):
-    if self.num_inference_steps is None:
-        raise ValueError(
-            "Number of inference steps is 'None', you need to run 'set_timesteps' after creating the scheduler"
-        )
 
     prev_timestep = (
         timestep - self.config.num_train_timesteps / self.num_inference_steps
     )
 
-    if timestep > self.timesteps.max():
-        raise NotImplementedError
-    else:
-        alpha_prod_t = self.alphas_cumprod[timestep]
+    alpha_prod_t, beta_prod_t = get_alpha_and_beta(self, timestep)
+    alpha_prod_t_prev, beta_prod_t_prev = get_alpha_and_beta(self, prev_timestep)
 
-    alpha_prod_t, beta_prod_t = get_alpha_and_beta(timestep, self)
-    alpha_prod_t_prev, _ = get_alpha_and_beta(prev_timestep, self)
+    a_t = (alpha_prod_t_prev / alpha_prod_t) ** 0.5
+    b_t = - a_t * (beta_prod_t ** 0.5) + beta_prod_t_prev ** 0.5
 
-    alpha_quotient = (alpha_prod_t / alpha_prod_t_prev) ** 0.5
+    next_model_input = (base - b_t * model_output) /  a_t
 
-    first_term = alpha_quotient * sample
-    second_term = ((beta_prod_t) ** 0.5) * model_output
-    third_term = alpha_quotient * ((1 - alpha_prod_t_prev) ** 0.5) * model_output
-    return first_term + second_term - third_term
+    return model_input, next_model_input
+
+
 
 
 @torch.no_grad()
@@ -390,10 +366,10 @@ def noise(
             noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
             noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
-            new_latent = reverse_step(scheduler, noise_pred, t, base)
-            new_latent = new_latent.to(base.dtype)
+            base, model_input = reverse_step(self=scheduler, base=base, model_input=model_input, model_output=noise_pred, timestep=t)
+            model_input = model_input.to(base.dtype)
 
-            latent_pair[latent_i] = new_latent
+            latent_pair[latent_i] = model_input
 
     
     results = [latent_pair]
@@ -458,10 +434,10 @@ def denoise(
             noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
             noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
-            new_latent = forward_step(scheduler, noise_pred, t, base)
-            new_latent = new_latent.to(base.dtype)
+            base, model_input = forward_step(self=scheduler, base=base, model_input=model_input, model_output=noise_pred, timestep=t)
+            model_input = model_input.to(base.dtype)
 
-            latent_pair[latent_i] = new_latent
+            latent_pair[latent_i] = model_input
 
         # Mixing layer (contraction) during generative process
         new_latents = [l.clone() for l in latent_pair]
