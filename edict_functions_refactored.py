@@ -100,8 +100,6 @@ def EDICT_editing(
         guidance_scale=guidance_scale,
         leapfrog_steps=leapfrog_steps,
     )
-
-    
     
     
     # Denoise intermediate state with new conditioning
@@ -242,27 +240,13 @@ def prep_image_for_return(image):
 ##### MAIN EDICT FUNCTION #######
 # Use EDICT_editing to perform calls
 
-@torch.no_grad()
-def noise(
-    base_prompt="",
-    null_prompt="",
-    guidance_scale=7.0,
-    steps=50,
-    seed=1,
-    width=512,
-    height=512,
-    init_image=None,
-    init_image_strength=1.0,
-    leapfrog_steps=True,
-    beta_schedule="scaled_linear",
-    mix_weight=0.93,
-):
-    # If seed is None, randomly select seed from 0 to 2^32-1
-    if seed is None:
-        seed = random.randrange(2**32 - 1)
-    generator = torch.cuda.manual_seed(seed)
+def image_to_latent(im, width, height, seed):
+        generator = torch.cuda.manual_seed(seed)
 
-    def image_to_latent(im):
+        # Change size to multiple of 64 to prevent size mismatches inside model
+        width = width - width % 64
+        height = height - height % 64
+
         if isinstance(im, torch.Tensor):
             # assume it's the latent
             # used to avoid clipping new generation before inversion
@@ -291,49 +275,9 @@ def noise(
             )
             return init_latent
 
-    
-    # Change size to multiple of 64 to prevent size mismatches inside model
-    width = width - width % 64
-    height = height - height % 64
-
-    # Preprocess image if it exists (img2img)
-    if init_image is not None:
-        # can take either pair (output of generative process) or single image
-        if isinstance(init_image, list):
-            if isinstance(init_image[0], torch.Tensor):
-                init_latent = [t.clone() for t in init_image]
-            else:
-                init_latent = [image_to_latent(im) for im in init_image]
-        else:
-            init_latent = image_to_latent(init_image)
-        # this is t_start for forward, t_end for reverse
-    
-    t_limit = steps - int(steps * init_image_strength)
-
-    latent = init_latent
-
-    if isinstance(latent, list):  # initializing from pair of images
-        latent_pair = latent
-    else:  # initializing from noise
-        latent_pair = [latent.clone(), latent.clone()]
-
-
-    # Set inference timesteps to scheduler
-    schedulers = []
-    for i in range(2):
-        # num_raw_timesteps = max(1000, steps)
-        scheduler = DDIMScheduler(
-            beta_start=0.00085,
-            beta_end=0.012,
-            beta_schedule=beta_schedule,
-            num_train_timesteps=1000,
-            clip_sample=False,
-            set_alpha_to_one=False,
-        )
-        scheduler.set_timesteps(steps)
-        schedulers.append(scheduler)
-
+def encode_prompt(prompt):
     # CLIP Text Embeddings
+    null_prompt = ""
     tokens_unconditional = clip_tokenizer(
         null_prompt,
         padding="max_length",
@@ -347,7 +291,7 @@ def noise(
     ).last_hidden_state
 
     tokens_conditional = clip_tokenizer(
-        base_prompt,
+        prompt,
         padding="max_length",
         max_length=clip_tokenizer.model_max_length,
         truncation=True,
@@ -358,7 +302,54 @@ def noise(
         tokens_conditional.input_ids.to(device)
     ).last_hidden_state
 
-    timesteps = schedulers[0].timesteps[t_limit:]
+    return torch.cat([embedding_unconditional, embedding_conditional])
+
+@torch.no_grad()
+def noise(
+    base_prompt="",
+    guidance_scale=7.0,
+    steps=50,
+    seed=1,
+    width=512,
+    height=512,
+    init_image=None,
+    init_image_strength=1.0,
+    leapfrog_steps=True,
+    beta_schedule="scaled_linear",
+    mix_weight=0.93,
+):
+    
+    # can take either pair (output of generative process) or single image
+    if isinstance(init_image, list):
+        init_latent = [image_to_latent(im, width, height, seed) for im in init_image]
+    else:
+        init_latent = image_to_latent(init_image, width, height, seed)
+        # this is t_start for forward, t_end for reverse
+    
+    t_limit = steps - int(steps * init_image_strength)
+
+    latent = init_latent
+
+    if isinstance(latent, list):  # initializing from pair of images
+        latent_pair = latent
+    else:  # initializing from noise
+        latent_pair = [latent.clone(), latent.clone()]
+
+
+    # Set inference timesteps to scheduler
+    scheduler = DDIMScheduler(
+            beta_start=0.00085,
+            beta_end=0.012,
+            beta_schedule=beta_schedule,
+            num_train_timesteps=1000,
+            clip_sample=False,
+            set_alpha_to_one=False,
+        )
+    scheduler.set_timesteps(steps)
+
+    prompt_embeds = encode_prompt(base_prompt)
+    
+    timesteps = scheduler.timesteps[t_limit:]
     timesteps = timesteps.flip(0)
 
     for i, t in tqdm(enumerate(timesteps), total=len(timesteps)):
@@ -389,28 +380,18 @@ def noise(
 
             latent_j = ((latent_i + 1) % 2)
 
-            latent_model_input = latent_pair[latent_j]
-            latent_base = latent_pair[latent_i]
+            model_input = latent_pair[latent_j]
+            base = latent_pair[latent_i]
 
-            # Predict the unconditional noise residual
-            noise_pred_uncond = unet(
-                latent_model_input, t, encoder_hidden_states=embedding_unconditional
-            ).sample
+            latent_model_input = torch.cat([model_input] * 2)
 
-            # Predict the conditional noise residual and save the cross-attention layer activations
-            noise_pred_cond = unet(
-                latent_model_input, t, encoder_hidden_states=embedding_conditional
-            ).sample
+            # Predict the noise residual
+            noise_pred = unet(latent_model_input, t, encoder_hidden_states=prompt_embeds).sample
+            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
-            # Perform guidance
-            grad = noise_pred_cond - noise_pred_uncond
-            noise_pred = noise_pred_uncond + guidance_scale * grad
-
-            step_call = reverse_step
-            new_latent = step_call(
-                schedulers[latent_i], noise_pred, t, latent_base
-            )  # .prev_sample
-            new_latent = new_latent.to(latent_base.dtype)
+            new_latent = reverse_step(scheduler, noise_pred, t, base)
+            new_latent = new_latent.to(base.dtype)
 
             latent_pair[latent_i] = new_latent
 
@@ -421,7 +402,6 @@ def noise(
 @torch.no_grad()
 def denoise(
     target_prompt="",
-    null_prompt="",
     guidance_scale=7.0,
     steps=50,
     init_image_strength=1.0,
@@ -444,10 +424,7 @@ def denoise(
         latent_pair = [latent.clone(), latent.clone()]
 
     # Set inference timesteps to scheduler
-    schedulers = []
-    for i in range(2):
-        # num_raw_timesteps = max(1000, steps)
-        scheduler = DDIMScheduler(
+    scheduler = DDIMScheduler(
             beta_start=0.00085,
             beta_end=0.012,
             beta_schedule=beta_schedule,
@@ -455,35 +432,11 @@ def denoise(
             clip_sample=False,
             set_alpha_to_one=False,
         )
-        scheduler.set_timesteps(steps)
-        schedulers.append(scheduler)
+    scheduler.set_timesteps(steps)
 
-    # CLIP Text Embeddings
-    tokens_unconditional = clip_tokenizer(
-        null_prompt,
-        padding="max_length",
-        max_length=clip_tokenizer.model_max_length,
-        truncation=True,
-        return_tensors="pt",
-        return_overflowing_tokens=True,
-    )
-    embedding_unconditional = clip(
-        tokens_unconditional.input_ids.to(device)
-    ).last_hidden_state
+    prompt_embeds = encode_prompt(target_prompt)
 
-    tokens_conditional = clip_tokenizer(
-        target_prompt,
-        padding="max_length",
-        max_length=clip_tokenizer.model_max_length,
-        truncation=True,
-        return_tensors="pt",
-        return_overflowing_tokens=True,
-    )
-    embedding_conditional = clip(
-        tokens_conditional.input_ids.to(device)
-    ).last_hidden_state
-
-    timesteps = schedulers[0].timesteps[t_limit:]
+    timesteps = scheduler.timesteps[t_limit:]
 
     for i, t in tqdm(enumerate(timesteps), total=len(timesteps)):
 
@@ -495,28 +448,18 @@ def denoise(
 
             latent_j = ((latent_i + 1) % 2)
 
-            latent_model_input = latent_pair[latent_j]
-            latent_base = latent_pair[latent_i]
+            model_input = latent_pair[latent_j]
+            base = latent_pair[latent_i]
 
-            # Predict the unconditional noise residual
-            noise_pred_uncond = unet(
-                latent_model_input, t, encoder_hidden_states=embedding_unconditional
-            ).sample
+            latent_model_input = torch.cat([model_input] * 2)
 
-            # Predict the conditional noise residual and save the cross-attention layer activations
-            noise_pred_cond = unet(
-                latent_model_input, t, encoder_hidden_states=embedding_conditional
-            ).sample
+            # Predict the noise residual
+            noise_pred = unet(latent_model_input, t, encoder_hidden_states=prompt_embeds).sample
+            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
-            # Perform guidance
-            grad = noise_pred_cond - noise_pred_uncond
-            noise_pred = noise_pred_uncond + guidance_scale * grad
-
-            step_call = forward_step
-            new_latent = step_call(
-                schedulers[latent_i], noise_pred, t, latent_base
-            )  # .prev_sample
-            new_latent = new_latent.to(latent_base.dtype)
+            new_latent = forward_step(scheduler, noise_pred, t, base)
+            new_latent = new_latent.to(base.dtype)
 
             latent_pair[latent_i] = new_latent
 
