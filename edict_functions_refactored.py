@@ -96,7 +96,7 @@ def EDICT_editing(
         init_image=orig_im,
         init_image_strength=init_image_strength,
         steps=steps,
-        mix_weight=mix_weight,
+        p=mix_weight,
         guidance_scale=guidance_scale,
         leapfrog_steps=leapfrog_steps,
     )
@@ -108,7 +108,7 @@ def EDICT_editing(
         fixed_starting_latent=latents,
         init_image_strength=init_image_strength,
         steps=steps,
-        mix_weight=mix_weight,
+        p=mix_weight,
         guidance_scale=guidance_scale,
         leapfrog_steps=leapfrog_steps
     )
@@ -280,6 +280,15 @@ def encode_prompt(prompt):
 
     return torch.cat([embedding_unconditional, embedding_conditional])
 
+
+def reverse_mixing_layer(latent_pair, p):
+    # Reverse mixing layer
+    new_latents = [l.clone() for l in latent_pair]
+    new_latents[1] = (new_latents[1].clone() - (1 - p) * new_latents[0].clone()) / p
+    new_latents[0] = (new_latents[0].clone() - (1 - p) * new_latents[1].clone()) / p
+
+    return new_latents
+
 @torch.no_grad()
 def noise(
     base_prompt="",
@@ -292,7 +301,7 @@ def noise(
     init_image_strength=1.0,
     leapfrog_steps=True,
     beta_schedule="scaled_linear",
-    mix_weight=0.93,
+    p=0.93,
 ):
     
     # can take either pair (output of generative process) or single image
@@ -330,15 +339,7 @@ def noise(
 
     for i, t in tqdm(enumerate(timesteps), total=len(timesteps)):
 
-        # Reverse mixing layer
-        new_latents = [l.clone() for l in latent_pair]
-        new_latents[1] = (
-            new_latents[1].clone() - (1 - mix_weight) * new_latents[0].clone()
-        ) / mix_weight
-        new_latents[0] = (
-            new_latents[0].clone() - (1 - mix_weight) * new_latents[1].clone()
-        ) / mix_weight
-        latent_pair = new_latents
+        latent_pair = reverse_mixing_layer(latent_pair, p=p)        
 
         # alternate EDICT steps
         for latent_i in range(2):
@@ -375,6 +376,15 @@ def noise(
     results = [latent_pair]
     return results if len(results) > 1 else results[0]
 
+
+def forward_mixing_layer(latent_pair, p):
+    # Mixing layer (contraction) during generative process
+    new_latents = [l.clone() for l in latent_pair]
+    new_latents[0] = (p * new_latents[0] + (1 - p) * new_latents[1]).clone()
+    new_latents[1] = (p * new_latents[1] + (1 - p) * new_latents[0]).clone()
+
+    return new_latents
+
 @torch.no_grad()
 def denoise(
     target_prompt="",
@@ -384,7 +394,7 @@ def denoise(
     leapfrog_steps=True,
     fixed_starting_latent=None,
     beta_schedule="scaled_linear",
-    mix_weight=0.93,
+    p=0.93,
 ):
     
     if isinstance(fixed_starting_latent, list):
@@ -439,15 +449,8 @@ def denoise(
 
             latent_pair[latent_i] = model_input
 
-        # Mixing layer (contraction) during generative process
-        new_latents = [l.clone() for l in latent_pair]
-        new_latents[0] = (
-            mix_weight * new_latents[0] + (1 - mix_weight) * new_latents[1]
-        ).clone()
-        new_latents[1] = (
-            (1 - mix_weight) * new_latents[0] + (mix_weight) * new_latents[1]
-        ).clone()
-        latent_pair = new_latents
+        latent_pair = forward_mixing_layer(latent_pair, p=p)
+        
 
     # decode latents to iamges
     images = []
