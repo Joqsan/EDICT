@@ -57,7 +57,6 @@ def EDICT_editing(
     mix_weight=0.93,
     init_image_strength=0.8,
     guidance_scale=3,
-    run_baseline=False,
     leapfrog_steps=True,
 ):
     """
@@ -92,26 +91,27 @@ def EDICT_editing(
     )  # trust OK
 
     # compute latent pair (second one will be original latent if run_baseline=True)
-    latents = coupled_stablediffusion(
+    latents = noise(
         base_prompt,
-        reverse=True,
         init_image=orig_im,
         init_image_strength=init_image_strength,
         steps=steps,
         mix_weight=mix_weight,
         guidance_scale=guidance_scale,
-        run_baseline=run_baseline,
         leapfrog_steps=leapfrog_steps,
     )
+
+    
+    
+    
     # Denoise intermediate state with new conditioning
-    gen = coupled_stablediffusion(
-        edit_prompt,
+    gen = denoise(
+        target_prompt=edit_prompt,
         fixed_starting_latent=latents,
         init_image_strength=init_image_strength,
         steps=steps,
         mix_weight=mix_weight,
         guidance_scale=guidance_scale,
-        run_baseline=run_baseline,
         leapfrog_steps=leapfrog_steps
     )
 
@@ -242,10 +242,9 @@ def prep_image_for_return(image):
 ##### MAIN EDICT FUNCTION #######
 # Use EDICT_editing to perform calls
 
-
 @torch.no_grad()
-def coupled_stablediffusion(
-    prompt="",
+def noise(
+    base_prompt="",
     null_prompt="",
     guidance_scale=7.0,
     steps=50,
@@ -254,11 +253,7 @@ def coupled_stablediffusion(
     height=512,
     init_image=None,
     init_image_strength=1.0,
-    run_baseline=False,
     leapfrog_steps=True,
-    reverse=False,
-    return_latents=False,
-    fixed_starting_latent=None,
     beta_schedule="scaled_linear",
     mix_weight=0.93,
 ):
@@ -296,15 +291,13 @@ def coupled_stablediffusion(
             )
             return init_latent
 
-    if run_baseline:
-        leapfrog_steps = False
+    
     # Change size to multiple of 64 to prevent size mismatches inside model
     width = width - width % 64
     height = height - height % 64
 
     # Preprocess image if it exists (img2img)
     if init_image is not None:
-        assert reverse  # want to be performing deterministic noising
         # can take either pair (output of generative process) or single image
         if isinstance(init_image, list):
             if isinstance(init_image[0], torch.Tensor):
@@ -314,40 +307,16 @@ def coupled_stablediffusion(
         else:
             init_latent = image_to_latent(init_image)
         # this is t_start for forward, t_end for reverse
-        t_limit = steps - int(steps * init_image_strength)
-    else:
-        assert not reverse, "Need image to reverse from"
-        init_latent = torch.zeros(
-            (1, unet.in_channels, height // 8, width // 8), device=device
-        )
-        t_limit = 0
+    
+    t_limit = steps - int(steps * init_image_strength)
 
-    if reverse:
-        latent = init_latent
-    else:
-        # Generate random normal noise
-        noise = torch.randn(
-            init_latent.shape, generator=generator, device=device, dtype=torch.float64
-        )
-        if fixed_starting_latent is None:
-            latent = noise
-        else:
-            if isinstance(fixed_starting_latent, list):
-                latent = [l.clone() for l in fixed_starting_latent]
-            else:
-                latent = fixed_starting_latent.clone()
-            t_limit = steps - int(steps * init_image_strength)
+    latent = init_latent
+
     if isinstance(latent, list):  # initializing from pair of images
         latent_pair = latent
     else:  # initializing from noise
         latent_pair = [latent.clone(), latent.clone()]
 
-    if steps == 0:
-        if init_image is not None:
-            return image_to_latent(init_image)
-        else:
-            image = vae.decode(latent.to(vae.dtype) / 0.18215).sample
-            return prep_image_for_return(image)
 
     # Set inference timesteps to scheduler
     schedulers = []
@@ -378,7 +347,7 @@ def coupled_stablediffusion(
     ).last_hidden_state
 
     tokens_conditional = clip_tokenizer(
-        prompt,
+        base_prompt,
         padding="max_length",
         max_length=clip_tokenizer.model_max_length,
         truncation=True,
@@ -390,43 +359,35 @@ def coupled_stablediffusion(
     ).last_hidden_state
 
     timesteps = schedulers[0].timesteps[t_limit:]
-    if reverse:
-        timesteps = timesteps.flip(0)
+    timesteps = timesteps.flip(0)
 
     for i, t in tqdm(enumerate(timesteps), total=len(timesteps)):
 
-        if (reverse) and (not run_baseline):
-            # Reverse mixing layer
-            new_latents = [l.clone() for l in latent_pair]
-            new_latents[1] = (
-                new_latents[1].clone() - (1 - mix_weight) * new_latents[0].clone()
-            ) / mix_weight
-            new_latents[0] = (
-                new_latents[0].clone() - (1 - mix_weight) * new_latents[1].clone()
-            ) / mix_weight
-            latent_pair = new_latents
+        # Reverse mixing layer
+        new_latents = [l.clone() for l in latent_pair]
+        new_latents[1] = (
+            new_latents[1].clone() - (1 - mix_weight) * new_latents[0].clone()
+        ) / mix_weight
+        new_latents[0] = (
+            new_latents[0].clone() - (1 - mix_weight) * new_latents[1].clone()
+        ) / mix_weight
+        latent_pair = new_latents
 
         # alternate EDICT steps
         for latent_i in range(2):
-            if run_baseline and latent_i == 1:
-                continue  # just have one sequence for baseline
+            
             # this modifies latent_pair[i] while using
             # latent_pair[(i+1)%2]
-            if reverse and (not run_baseline):
-                if leapfrog_steps:
-                    # what i would be from going other way
-                    orig_i = len(timesteps) - (i + 1)
-                    offset = (orig_i + 1) % 2
-                    latent_i = (latent_i + offset) % 2
-                else:
-                    # Do 1 then 0
-                    latent_i = (latent_i + 1) % 2
+            if leapfrog_steps:
+                # what i would be from going other way
+                orig_i = len(timesteps) - (i + 1)
+                offset = (orig_i + 1) % 2
+                latent_i = (latent_i + offset) % 2
             else:
-                if leapfrog_steps:
-                    offset = i % 2
-                    latent_i = (latent_i + offset) % 2
+                # Do 1 then 0
+                latent_i = (latent_i + 1) % 2
 
-            latent_j = ((latent_i + 1) % 2) if not run_baseline else latent_i
+            latent_j = ((latent_i + 1) % 2)
 
             latent_model_input = latent_pair[latent_j]
             latent_base = latent_pair[latent_i]
@@ -445,7 +406,7 @@ def coupled_stablediffusion(
             grad = noise_pred_cond - noise_pred_uncond
             noise_pred = noise_pred_uncond + guidance_scale * grad
 
-            step_call = reverse_step if reverse else forward_step
+            step_call = reverse_step
             new_latent = step_call(
                 schedulers[latent_i], noise_pred, t, latent_base
             )  # .prev_sample
@@ -453,21 +414,121 @@ def coupled_stablediffusion(
 
             latent_pair[latent_i] = new_latent
 
-        if (not reverse) and (not run_baseline):
-            # Mixing layer (contraction) during generative process
-            new_latents = [l.clone() for l in latent_pair]
-            new_latents[0] = (
-                mix_weight * new_latents[0] + (1 - mix_weight) * new_latents[1]
-            ).clone()
-            new_latents[1] = (
-                (1 - mix_weight) * new_latents[0] + (mix_weight) * new_latents[1]
-            ).clone()
-            latent_pair = new_latents
+    
+    results = [latent_pair]
+    return results if len(results) > 1 else results[0]
 
-    # scale and decode the image latents with vae, can return latents instead of images
-    if reverse or return_latents:
-        results = [latent_pair]
-        return results if len(results) > 1 else results[0]
+@torch.no_grad()
+def denoise(
+    target_prompt="",
+    null_prompt="",
+    guidance_scale=7.0,
+    steps=50,
+    init_image_strength=1.0,
+    leapfrog_steps=True,
+    fixed_starting_latent=None,
+    beta_schedule="scaled_linear",
+    mix_weight=0.93,
+):
+    
+    if isinstance(fixed_starting_latent, list):
+        latent = [l.clone() for l in fixed_starting_latent]
+    else:
+        latent = fixed_starting_latent.clone()
+
+    t_limit = steps - int(steps * init_image_strength)
+    
+    if isinstance(latent, list):  # initializing from pair of images
+        latent_pair = latent
+    else:  # initializing from noise
+        latent_pair = [latent.clone(), latent.clone()]
+
+    # Set inference timesteps to scheduler
+    schedulers = []
+    for i in range(2):
+        # num_raw_timesteps = max(1000, steps)
+        scheduler = DDIMScheduler(
+            beta_start=0.00085,
+            beta_end=0.012,
+            beta_schedule=beta_schedule,
+            num_train_timesteps=1000,
+            clip_sample=False,
+            set_alpha_to_one=False,
+        )
+        scheduler.set_timesteps(steps)
+        schedulers.append(scheduler)
+
+    # CLIP Text Embeddings
+    tokens_unconditional = clip_tokenizer(
+        null_prompt,
+        padding="max_length",
+        max_length=clip_tokenizer.model_max_length,
+        truncation=True,
+        return_tensors="pt",
+        return_overflowing_tokens=True,
+    )
+    embedding_unconditional = clip(
+        tokens_unconditional.input_ids.to(device)
+    ).last_hidden_state
+
+    tokens_conditional = clip_tokenizer(
+        target_prompt,
+        padding="max_length",
+        max_length=clip_tokenizer.model_max_length,
+        truncation=True,
+        return_tensors="pt",
+        return_overflowing_tokens=True,
+    )
+    embedding_conditional = clip(
+        tokens_conditional.input_ids.to(device)
+    ).last_hidden_state
+
+    timesteps = schedulers[0].timesteps[t_limit:]
+
+    for i, t in tqdm(enumerate(timesteps), total=len(timesteps)):
+
+        # alternate EDICT steps
+        for latent_i in range(2):
+            if leapfrog_steps:
+                offset = i % 2
+                latent_i = (latent_i + offset) % 2
+
+            latent_j = ((latent_i + 1) % 2)
+
+            latent_model_input = latent_pair[latent_j]
+            latent_base = latent_pair[latent_i]
+
+            # Predict the unconditional noise residual
+            noise_pred_uncond = unet(
+                latent_model_input, t, encoder_hidden_states=embedding_unconditional
+            ).sample
+
+            # Predict the conditional noise residual and save the cross-attention layer activations
+            noise_pred_cond = unet(
+                latent_model_input, t, encoder_hidden_states=embedding_conditional
+            ).sample
+
+            # Perform guidance
+            grad = noise_pred_cond - noise_pred_uncond
+            noise_pred = noise_pred_uncond + guidance_scale * grad
+
+            step_call = forward_step
+            new_latent = step_call(
+                schedulers[latent_i], noise_pred, t, latent_base
+            )  # .prev_sample
+            new_latent = new_latent.to(latent_base.dtype)
+
+            latent_pair[latent_i] = new_latent
+
+        # Mixing layer (contraction) during generative process
+        new_latents = [l.clone() for l in latent_pair]
+        new_latents[0] = (
+            mix_weight * new_latents[0] + (1 - mix_weight) * new_latents[1]
+        ).clone()
+        new_latents[1] = (
+            (1 - mix_weight) * new_latents[0] + (mix_weight) * new_latents[1]
+        ).clone()
+        latent_pair = new_latents
 
     # decode latents to iamges
     images = []
