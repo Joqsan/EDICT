@@ -281,12 +281,12 @@ def encode_prompt(prompt):
     return torch.cat([embedding_unconditional, embedding_conditional])
 
 
-def reverse_mixing_layer(latent_pair, p):
+def reverse_mixing_layer(x, y, p):
     # Reverse mixing layer
-    latent_pair[1] = (latent_pair[1] - (1 - p) * latent_pair[0]) / p
-    latent_pair[0] = (latent_pair[0] - (1 - p) * latent_pair[1]) / p
+    y = (y - (1 - p) * x) / p
+    x = (x - (1 - p) * y) / p
 
-    return latent_pair
+    return y, x
 
 @torch.no_grad()
 def noise(
@@ -312,12 +312,7 @@ def noise(
     
     t_limit = steps - int(steps * init_image_strength)
 
-    latent = init_latent
-
-    if isinstance(latent, list):  # initializing from pair of images
-        latent_pair = latent
-    else:  # initializing from noise
-        latent_pair = [latent.clone(), latent.clone()]
+    model_input, base = init_latent.clone(), init_latent.clone()
 
 
     # Set inference timesteps to scheduler
@@ -338,7 +333,7 @@ def noise(
 
     for i, t in tqdm(enumerate(timesteps), total=len(timesteps)):
 
-        latent_pair = reverse_mixing_layer(latent_pair, p=p)        
+        base, model_input = reverse_mixing_layer(x=model_input, y=base, p=p)        
 
         # alternate EDICT steps
         for latent_i in range(2):
@@ -356,8 +351,8 @@ def noise(
 
             latent_j = ((latent_i + 1) % 2)
 
-            model_input = latent_pair[latent_j]
-            base = latent_pair[latent_i]
+            if latent_i == 0:
+                base, model_input = model_input, base
 
             latent_model_input = torch.cat([model_input] * 2)
 
@@ -369,10 +364,8 @@ def noise(
             base, model_input = reverse_step(self=scheduler, base=base, model_input=model_input, model_output=noise_pred, timestep=t)
             model_input = model_input.to(base.dtype)
 
-            latent_pair[latent_i] = model_input
-
     
-    results = [latent_pair]
+    results = [base, model_input]
     return results if len(results) > 1 else results[0]
 
 
