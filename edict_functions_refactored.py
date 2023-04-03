@@ -283,11 +283,10 @@ def encode_prompt(prompt):
 
 def reverse_mixing_layer(latent_pair, p):
     # Reverse mixing layer
-    new_latents = [l.clone() for l in latent_pair]
-    new_latents[1] = (new_latents[1].clone() - (1 - p) * new_latents[0].clone()) / p
-    new_latents[0] = (new_latents[0].clone() - (1 - p) * new_latents[1].clone()) / p
+    latent_pair[1] = (latent_pair[1] - (1 - p) * latent_pair[0]) / p
+    latent_pair[0] = (latent_pair[0] - (1 - p) * latent_pair[1]) / p
 
-    return new_latents
+    return latent_pair
 
 @torch.no_grad()
 def noise(
@@ -379,11 +378,10 @@ def noise(
 
 def forward_mixing_layer(latent_pair, p):
     # Mixing layer (contraction) during generative process
-    new_latents = [l.clone() for l in latent_pair]
-    new_latents[0] = (p * new_latents[0] + (1 - p) * new_latents[1]).clone()
-    new_latents[1] = (p * new_latents[1] + (1 - p) * new_latents[0]).clone()
+    latent_pair[0] = (p * latent_pair[0] + (1 - p) * latent_pair[1])
+    latent_pair[1] = (p * latent_pair[1] + (1 - p) * latent_pair[0])
 
-    return new_latents
+    return latent_pair
 
 @torch.no_grad()
 def denoise(
