@@ -341,9 +341,9 @@ def noise(
         latent_pair = reverse_mixing_layer(x=latent_pair[0], y=latent_pair[1], p=p)        
 
         # alternate EDICT steps
-        for latent_i in range(2):
+        for latent_j in range(2):
             
-            latent_j = latent_i ^ 1
+            latent_i = latent_j ^ 1
 
             if leapfrog_steps:
                 if i % 2 == 0:
