@@ -281,12 +281,12 @@ def encode_prompt(prompt):
     return torch.cat([embedding_unconditional, embedding_conditional])
 
 
-def reverse_mixing_layer(latent_pair, p):
+def reverse_mixing_layer(x, y, p):
     # Reverse mixing layer
-    latent_pair[1] = (latent_pair[1] - (1 - p) * latent_pair[0]) / p
-    latent_pair[0] = (latent_pair[0] - (1 - p) * latent_pair[1]) / p
+    y = (y - (1 - p) * x) / p
+    x = (x - (1 - p) * y) / p
 
-    return latent_pair
+    return [y, x]
 
 @torch.no_grad()
 def noise(
@@ -338,7 +338,7 @@ def noise(
 
     for i, t in tqdm(enumerate(timesteps), total=len(timesteps)):
 
-        latent_pair = reverse_mixing_layer(latent_pair, p=p)        
+        latent_pair = reverse_mixing_layer(x=latent_pair[0], y=latent_pair[1], p=p)        
 
         # alternate EDICT steps
         for latent_i in range(2):
