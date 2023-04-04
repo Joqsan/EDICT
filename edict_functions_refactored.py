@@ -343,18 +343,11 @@ def noise(
         # alternate EDICT steps
         for latent_i in range(2):
             
-            # this modifies latent_pair[i] while using
-            # latent_pair[(i+1)%2]
-            if leapfrog_steps:
-                # what i would be from going other way
-                orig_i = len(timesteps) - (i + 1)
-                offset = (orig_i + 1) % 2
-                latent_i = (latent_i + offset) % 2
-            else:
-                # Do 1 then 0
-                latent_i = (latent_i + 1) % 2
+            latent_j = latent_i ^ 1
 
-            latent_j = ((latent_i + 1) % 2)
+            if leapfrog_steps:
+                if i % 2 == 0:
+                    latent_i, latent_j = latent_j, latent_i
 
             model_input = latent_pair[latent_j]
             base = latent_pair[latent_i]
