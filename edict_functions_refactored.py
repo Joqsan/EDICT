@@ -286,7 +286,7 @@ def reverse_mixing_layer(x, y, p):
     y = (y - (1 - p) * x) / p
     x = (x - (1 - p) * y) / p
 
-    return [y, x]
+    return [x, y]
 
 @torch.no_grad()
 def noise(
