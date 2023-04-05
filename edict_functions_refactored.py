@@ -336,21 +336,17 @@ def noise(
     timesteps = scheduler.timesteps[t_limit:]
     timesteps = timesteps.flip(0)
 
+    model_input, base = latent.clone(), latent.clone()
     for i, t in tqdm(enumerate(timesteps), total=len(timesteps)):
 
-        latent_pair = reverse_mixing_layer(x=latent_pair[0], y=latent_pair[1], p=p)        
+        model_input, base = reverse_mixing_layer(x=model_input, y=base, p=p)        
 
         # alternate EDICT steps
         for latent_j in range(2):
-            
-            latent_i = latent_j ^ 1
 
             if leapfrog_steps:
                 if i % 2 == 0:
-                    latent_i, latent_j = latent_j, latent_i
-
-            model_input = latent_pair[latent_j]
-            base = latent_pair[latent_i]
+                    model_input, base = base, model_input
 
             latent_model_input = torch.cat([model_input] * 2)
 
@@ -362,10 +358,9 @@ def noise(
             base, model_input = reverse_step(self=scheduler, base=base, model_input=model_input, model_output=noise_pred, timestep=t)
             model_input = model_input.to(base.dtype)
 
-            latent_pair[latent_i] = model_input
 
     
-    results = [latent_pair]
+    results = [model_input, base]
     return results if len(results) > 1 else results[0]
 
 
