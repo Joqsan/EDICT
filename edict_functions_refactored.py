@@ -345,7 +345,7 @@ def noise(
         for latent_j in range(2):
 
             if leapfrog_steps:
-                if i % 2 == 0:
+                if latent_j % 2 == 0:
                     model_input, base = base, model_input
 
             latent_model_input = torch.cat([model_input] * 2)
