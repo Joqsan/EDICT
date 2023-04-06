@@ -387,18 +387,11 @@ def denoise(
     beta_schedule="scaled_linear",
     p=0.93,
 ):
-    
-    if isinstance(fixed_starting_latent, list):
-        latent = [l.clone() for l in fixed_starting_latent]
-    else:
-        latent = fixed_starting_latent.clone()
+
 
     t_limit = steps - int(steps * init_image_strength)
     
-    if isinstance(latent, list):  # initializing from pair of images
-        latent_pair = latent
-    else:  # initializing from noise
-        latent_pair = [latent.clone(), latent.clone()]
+    latent_pair = fixed_starting_latent
 
     # Set inference timesteps to scheduler
     scheduler = DDIMScheduler(
@@ -419,11 +412,12 @@ def denoise(
 
         # alternate EDICT steps
         for latent_i in range(2):
-            if leapfrog_steps:
-                offset = i % 2
-                latent_i = (latent_i + offset) % 2
+            
+            latent_j = latent_i ^ 1
 
-            latent_j = ((latent_i + 1) % 2)
+            if leapfrog_steps:
+                if i % 2 == 1:
+                    latent_i, latent_j = latent_j, latent_i
 
             model_input = latent_pair[latent_j]
             base = latent_pair[latent_i]
