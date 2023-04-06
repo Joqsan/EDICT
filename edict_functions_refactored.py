@@ -369,12 +369,12 @@ def noise(
     return results if len(results) > 1 else results[0]
 
 
-def forward_mixing_layer(latent_pair, p):
+def forward_mixing_layer(x, y, p):
     # Mixing layer (contraction) during generative process
-    latent_pair[0] = (p * latent_pair[0] + (1 - p) * latent_pair[1])
-    latent_pair[1] = (p * latent_pair[1] + (1 - p) * latent_pair[0])
+    x = (p * x + (1 - p) * y)
+    y = (p * y + (1 - p) * x)
 
-    return latent_pair
+    return [x, y]
 
 @torch.no_grad()
 def denoise(
@@ -434,7 +434,7 @@ def denoise(
 
             latent_pair[latent_i] = model_input
 
-        latent_pair = forward_mixing_layer(latent_pair, p=p)
+        latent_pair = forward_mixing_layer(x=latent_pair[0], y=latent_pair[1], p=p)
         
 
     # decode latents to iamges
